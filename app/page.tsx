@@ -3,6 +3,7 @@
 import { motion } from 'framer-motion'
 import { useState, useEffect } from 'react'
 import { Inter, Space_Grotesk } from "next/font/google";
+import Image from 'next/image';
 import { subscribeToEmailCount, getEmailCount } from '../lib/firestore';
 
 // Real-time email counter hook using Firestore
@@ -583,7 +584,7 @@ export default function Home() {
               </span>
             </h2>
             <p className="text-xl text-secondary/80 max-w-4xl mx-auto font-inter font-medium leading-relaxed">
-              From simple images to stunning 3D models - witness the power of AI transformation that's revolutionizing game development.
+              From simple images to stunning 3D models - witness the power of AI transformation that&apos;s revolutionizing game development.
             </p>
           </motion.div>
 
@@ -605,9 +606,11 @@ export default function Home() {
               <div className="flex-1 max-w-md">
                 <div className="text-sm font-bold text-gray-600 mb-3 text-center font-space-grotesk">BEFORE: Your Image</div>
                 <div className="relative group">
-                  <img 
+                  <Image 
                     src="/image-model/51S-uHIx5sL.jpg" 
                     alt="Input image example" 
+                    width={400}
+                    height={400}
                     className="w-full aspect-square object-cover rounded-lg border-2 border-gray-300 shadow-lg transition-transform group-hover:scale-105"
                   />
                   <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-10 transition-all rounded-lg"></div>
