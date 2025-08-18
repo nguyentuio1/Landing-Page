@@ -1,108 +1,37 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { Inter, Space_Grotesk } from "next/font/google";
+import { subscribeToEmailCount, getEmailCount } from '../lib/firestore';
 
-// Real-time email counter hook
+// Real-time email counter hook using Firestore
 const useRealTimeEmailCount = () => {
   const [count, setCount] = useState(1247);
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [isConnected, setIsConnected] = useState(false);
 
-  const connectWebSocket = () => {
-    try {
-      // Connect to your local WebSocket server
-      const ws = new WebSocket('ws://localhost:8081');
-      
-      ws.onopen = () => {
-        console.log('WebSocket connected');
-        setIsConnected(true);
-        wsRef.current = ws;
-        
-        // Send initial count request
-        ws.send(JSON.stringify({ type: 'get_count' }));
-      };
-      
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.type === 'count_update') {
-            setCount(data.count);
-          }
-        } catch (e) {
-          console.log('Failed to parse WebSocket message:', e);
-        }
-      };
-      
-      ws.onclose = () => {
-        console.log('WebSocket disconnected');
-        setIsConnected(false);
-        wsRef.current = null;
-        
-        // Reconnect after 3 seconds
-        reconnectTimeoutRef.current = setTimeout(() => {
-          connectWebSocket();
-        }, 3000);
-      };
-      
-      ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        setIsConnected(false);
-      };
-      
-    } catch (error) {
-      console.error('Failed to connect WebSocket:', error);
-      setIsConnected(false);
-    }
-  };
-
-  const broadcastEmailAdded = (email?: string) => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ 
-        type: 'email_added',
-        email: email,
-        timestamp: Date.now() 
-      }));
-    }
-    // Don't update locally - let the server broadcast the real count
-  };
-
   useEffect(() => {
-    connectWebSocket();
-    
-    // Cleanup
-    return () => {
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-      }
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
-    };
+    // Get initial count
+    getEmailCount().then(initialCount => {
+      setCount(initialCount);
+      setIsConnected(true);
+    }).catch(error => {
+      console.error('Error getting initial count:', error);
+      setCount(1247); // Fallback count
+      setIsConnected(false);
+    });
+
+    // Subscribe to real-time updates
+    const unsubscribe = subscribeToEmailCount((newCount) => {
+      setCount(newCount);
+      setIsConnected(true);
+    });
+
+    // Cleanup subscription on unmount
+    return unsubscribe;
   }, []);
 
-  // Fallback polling mechanism - only fetch real count, no auto-increment
-  useEffect(() => {
-    if (!isConnected) {
-      const pollInterval = setInterval(async () => {
-        try {
-          const response = await fetch('http://localhost:8080/api/count');
-          if (response.ok) {
-            const data = await response.json();
-            setCount(data.count);
-          }
-        } catch (error) {
-          console.log('Polling failed, keeping current count');
-        }
-      }, 10000); // Poll every 10 seconds when disconnected
-      
-      return () => clearInterval(pollInterval);
-    }
-  }, [isConnected]);
-
-  return { count, broadcastEmailAdded, isConnected };
+  return { count, isConnected };
 };
 
 interface EmailFormState {
@@ -187,7 +116,7 @@ const spaceGrotesk = Space_Grotesk({
   variable: "--font-space-grotesk",
 });
 
-const EmailSignup = ({ onEmailAdded }: { onEmailAdded: (email: string) => void }) => {
+const EmailSignup = () => {
   const [formState, setFormState] = useState<EmailFormState>({
     email: '',
     isSubmitting: false,
@@ -211,18 +140,14 @@ const EmailSignup = ({ onEmailAdded }: { onEmailAdded: (email: string) => void }
     setFormState(prev => ({ ...prev, isSubmitting: true, error: '' }));
 
     try {
-      // Send email to your backend API
-      const response = await fetch('http://localhost:8080/api/emails', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ email: formState.email }),
-      });
+      // Import the Firestore function
+      const { addEmailToFirestore } = await import('../lib/firestore');
       
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to add email');
+      // Add email to Firestore
+      const result = await addEmailToFirestore(formState.email);
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to add email');
       }
       
       setFormState(prev => ({ 
@@ -232,7 +157,7 @@ const EmailSignup = ({ onEmailAdded }: { onEmailAdded: (email: string) => void }
         email: ''
       }));
       
-      // No need to call onEmailAdded - the server already broadcasts the count update
+      // Firestore real-time listeners will automatically update the count
     } catch (error) {
       setFormState(prev => ({ 
         ...prev, 
@@ -353,21 +278,48 @@ const GradientOrb = ({ className, delay = 0 }: { className?: string; delay?: num
 
 export default function Home() {
   const [isLoaded, setIsLoaded] = useState(false)
-  const { count: emailCount, broadcastEmailAdded, isConnected } = useRealTimeEmailCount();
+  const [splineLoaded, setSplineLoaded] = useState(false)
+  const { count: emailCount, isConnected } = useRealTimeEmailCount();
+
+  const scrollToEmailSignup = () => {
+    const emailSection = document.querySelector('#email-signup');
+    if (emailSection) {
+      emailSection.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
 
   useEffect(() => {
     setIsLoaded(true)
+    // Delay Spline loading to prioritize critical content
+    const timer = setTimeout(() => {
+      setSplineLoaded(true)
+    }, 1500)
+    return () => clearTimeout(timer)
   }, [])
-
-  const handleEmailAdded = (email: string) => {
-    broadcastEmailAdded(email);
-  };
 
   return (
     <main className={`min-h-screen text-primary overflow-hidden ${inter.variable} ${spaceGrotesk.variable}`}>
-      {/* Spline 3D Background */}
+      {/* Optimized Spline 3D Background with Lazy Loading */}
       <div className="fixed inset-0 z-0">
-        <spline-viewer url="https://prod.spline.design/Z4Ub-8CJ48AxGork/scene.splinecode" />
+        <div className="w-full h-full bg-gradient-to-br from-blue-50 via-white to-purple-50" />
+        {splineLoaded && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 1 }}
+            className="absolute inset-0"
+          >
+            <spline-viewer 
+              url="https://prod.spline.design/Z4Ub-8CJ48AxGork/scene.splinecode"
+              loading-anim-type="spinner-small-dark"
+              style={{
+                width: '100%',
+                height: '100%',
+                background: 'transparent'
+              }}
+            />
+          </motion.div>
+        )}
       </div>
 
       {/* Navigation */}
@@ -388,6 +340,7 @@ export default function Home() {
         <motion.button
           whileHover={{ scale: 1.05 }}
           whileTap={{ scale: 0.95 }}
+          onClick={scrollToEmailSignup}
           className="bg-button-primary text-white px-6 py-2 rounded-lg transition-all font-medium hover:scale-105"
         >
           Get Started
@@ -415,7 +368,7 @@ export default function Home() {
             <br />
             with AI-Powered{' '}
             <span className="gradient-text">
-              3D Magic
+              Anper
             </span>
             <br />
             for{' '}
@@ -443,6 +396,7 @@ export default function Home() {
             <motion.button
               whileHover={{ scale: 1.05, boxShadow: "0 20px 40px rgba(107, 114, 128, 0.3)" }}
               whileTap={{ scale: 0.95 }}
+              onClick={scrollToEmailSignup}
               className="bg-button-primary text-white px-12 py-4 rounded-xl text-lg font-semibold transition-all duration-300 shadow-lg hover:scale-105"
             >
               Start Creating for Free
@@ -450,6 +404,7 @@ export default function Home() {
             <motion.button
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
+              onClick={scrollToEmailSignup}
               className="glass-morphism px-12 py-4 rounded-xl text-lg font-semibold transition-all duration-300 hover:bg-white/90 text-primary border border-accent/30 hover:border-accent/50"
             >
               Watch Demo
@@ -611,8 +566,154 @@ export default function Home() {
         </div>
       </section>
 
+      {/* Examples/Showcase Section */}
+      <section className="relative z-10 py-20 px-6 bg-gradient-to-b from-gray-50/50 to-transparent">
+        <div className="max-w-7xl mx-auto">
+          <motion.div
+            initial={{ y: 50, opacity: 0 }}
+            whileInView={{ y: 0, opacity: 1 }}
+            transition={{ duration: 0.8 }}
+            viewport={{ once: true }}
+            className="text-center mb-16"
+          >
+            <h2 className="text-4xl md:text-6xl font-bold mb-8 font-space-grotesk leading-tight tracking-tight">
+              See the{' '}
+              <span className="gradient-text">
+                Magic in Action
+              </span>
+            </h2>
+            <p className="text-xl text-secondary/80 max-w-4xl mx-auto font-inter font-medium leading-relaxed">
+              From simple images to stunning 3D models - witness the power of AI transformation that's revolutionizing game development.
+            </p>
+          </motion.div>
+
+          {/* Image to 3D Example - Full Width */}
+          <motion.div
+            initial={{ y: 50, opacity: 0 }}
+            whileInView={{ y: 0, opacity: 1 }}
+            transition={{ duration: 0.8 }}
+            viewport={{ once: true }}
+            className="glass-morphism p-8 rounded-2xl border-subtle mb-16"
+          >
+            <div className="text-center mb-8">
+              <h3 className="text-3xl font-bold mb-3 text-accent font-space-grotesk">🖼️ Image to 3D Model Transformation</h3>
+              <p className="text-lg text-secondary/80 font-inter">See how our AI transforms a simple image into a stunning 3D model</p>
+            </div>
+            
+            <div className="flex flex-col lg:flex-row items-center justify-center gap-8 max-w-6xl mx-auto">
+              {/* Input Image */}
+              <div className="flex-1 max-w-md">
+                <div className="text-sm font-bold text-gray-600 mb-3 text-center font-space-grotesk">BEFORE: Your Image</div>
+                <div className="relative group">
+                  <img 
+                    src="/image-model/51S-uHIx5sL.jpg" 
+                    alt="Input image example" 
+                    className="w-full aspect-square object-cover rounded-lg border-2 border-gray-300 shadow-lg transition-transform group-hover:scale-105"
+                  />
+                  <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-10 transition-all rounded-lg"></div>
+                </div>
+                <p className="text-sm text-gray-600 text-center mt-2 font-inter">Original uploaded image</p>
+              </div>
+              
+              {/* Arrow */}
+              <div className="flex flex-col items-center">
+                <motion.div 
+                  animate={{ scale: [1, 1.2, 1] }}
+                  transition={{ duration: 2, repeat: Infinity }}
+                  className="text-4xl text-accent mb-2"
+                >
+                  ✨
+                </motion.div>
+                <div className="text-2xl text-accent font-bold">AI Magic</div>
+                <motion.div 
+                  animate={{ x: [0, 10, 0] }}
+                  transition={{ duration: 2, repeat: Infinity }}
+                  className="text-3xl text-accent mt-2"
+                >
+                  →
+                </motion.div>
+              </div>
+              
+              {/* Output 3D Model Video */}
+              <div className="flex-1 max-w-md">
+                <div className="text-sm font-bold text-gray-600 mb-3 text-center font-space-grotesk">AFTER: 3D Model</div>
+                <div className="relative group">
+                  <video 
+                    src="/video-model/Hunyuan3D-2.0 - a Hugging Face Space by tencent - Google Chrome 2025-08-18 23-26-38 (online-video-cutter.com).mp4"
+                    autoPlay
+                    loop
+                    muted
+                    playsInline
+                    className="w-full aspect-square object-cover rounded-lg border-2 border-accent/30 shadow-lg bg-gradient-to-br from-blue-50 to-purple-50"
+                  />
+                  <div className="absolute top-2 right-2 bg-green-500 text-white text-xs px-2 py-1 rounded-full font-semibold">
+                    LIVE 3D
+                  </div>
+                </div>
+                <p className="text-sm text-accent font-bold text-center mt-2 font-inter">Interactive 3D model ready for Roblox</p>
+              </div>
+            </div>
+            
+            {/* Stats */}
+            <div className="grid grid-cols-3 gap-6 mt-8 pt-8 border-t border-gray-200">
+              <div className="text-center">
+                <div className="text-2xl font-bold text-accent font-space-grotesk">15s</div>
+                <div className="text-sm text-secondary/80 font-inter">Processing Time</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-accent font-space-grotesk">100%</div>
+                <div className="text-sm text-secondary/80 font-inter">Roblox Compatible</div>
+              </div>
+              <div className="text-center">
+                <div className="text-2xl font-bold text-accent font-space-grotesk">Studio</div>
+                <div className="text-sm text-secondary/80 font-inter">Quality Output</div>
+              </div>
+            </div>
+          </motion.div>
+
+          {/* Feature Highlights */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+            <motion.div
+              initial={{ y: 30, opacity: 0 }}
+              whileInView={{ y: 0, opacity: 1 }}
+              transition={{ duration: 0.6, delay: 0.1 }}
+              viewport={{ once: true }}
+              className="text-center"
+            >
+              <div className="text-3xl mb-4">⚡</div>
+              <h4 className="font-bold text-lg mb-2 font-space-grotesk">Lightning Fast</h4>
+              <p className="text-secondary/80 text-sm font-inter">Transform images to 3D models in under 60 seconds</p>
+            </motion.div>
+            
+            <motion.div
+              initial={{ y: 30, opacity: 0 }}
+              whileInView={{ y: 0, opacity: 1 }}
+              transition={{ duration: 0.6, delay: 0.2 }}
+              viewport={{ once: true }}
+              className="text-center"
+            >
+              <div className="text-3xl mb-4">🎯</div>
+              <h4 className="font-bold text-lg mb-2 font-space-grotesk">Roblox Ready</h4>
+              <p className="text-secondary/80 text-sm font-inter">Perfect optimization for Roblox Studio import</p>
+            </motion.div>
+            
+            <motion.div
+              initial={{ y: 30, opacity: 0 }}
+              whileInView={{ y: 0, opacity: 1 }}
+              transition={{ duration: 0.6, delay: 0.3 }}
+              viewport={{ once: true }}
+              className="text-center"
+            >
+              <div className="text-3xl mb-4">✨</div>
+              <h4 className="font-bold text-lg mb-2 font-space-grotesk">Studio Quality</h4>
+              <p className="text-secondary/80 text-sm font-inter">Professional-grade results every time</p>
+            </motion.div>
+          </div>
+        </div>
+      </section>
+
       {/* Email Signup Section */}
-      <section className="relative z-10 py-20 px-6">
+      <section id="email-signup" className="relative z-10 py-20 px-6">
         <motion.div
           initial={{ y: 50, opacity: 0 }}
           whileInView={{ y: 0, opacity: 1 }}
@@ -637,7 +738,7 @@ export default function Home() {
           transition={{ duration: 0.8, delay: 0.2 }}
           viewport={{ once: true }}
         >
-          <EmailSignup onEmailAdded={handleEmailAdded} />
+          <EmailSignup />
         </motion.div>
         
         {/* Social Proof Counter */}
@@ -650,15 +751,10 @@ export default function Home() {
         >
           <div className="glass-morphism inline-flex items-center px-6 py-3 rounded-full border-subtle">
             <div className="flex items-center space-x-2">
-              <div className="flex -space-x-2">
-                <div className="w-8 h-8 bg-gradient-to-r from-gray-400 to-gray-600 rounded-full border-2 border-white"></div>
-                <div className="w-8 h-8 bg-gradient-to-r from-gray-500 to-gray-700 rounded-full border-2 border-white"></div>
-                <div className="w-8 h-8 bg-gradient-to-r from-gray-600 to-gray-800 rounded-full border-2 border-white"></div>
-              </div>
               <div className="text-sm text-secondary/80 font-inter font-medium">
                 <AnimatedCounter count={emailCount} /> developers already joined
                 {isConnected && (
-                  <div className="flex items-center ml-2">
+                  <div className="items-center ml-2 inline-flex">
                     <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
                   </div>
                 )}

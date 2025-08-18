@@ -10,7 +10,14 @@
       "Bash(npx next lint:*)",
       "Bash(npx tsc:*)",
       "Bash(npm start)",
-      "Bash(taskkill:*)"
+      "Bash(taskkill:*)",
+      "Bash(npm install:*)",
+      "Bash(firebase login:*)",
+      "Bash(firebase:*)",
+      "Bash(del publicindex.html)",
+      "Bash(rm:*)",
+      "Bash(rg:*)",
+      "Bash(cp:*)"
     ],
     "deny": [],
     "ask": [],
